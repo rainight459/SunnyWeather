@@ -1,5 +1,9 @@
 package com.sunnyweather.android
 
+import WeatherCheckWorker
+import android.app.NotificationChannel
+import android.app.NotificationManager
+import android.content.Context
 import android.os.Bundle
 
 import android.view.LayoutInflater
@@ -9,6 +13,12 @@ import android.widget.TextView
 import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
 import android.graphics.Color
+import android.os.Build
+import android.util.Log
+import android.view.inputmethod.InputMethodManager
+import androidx.core.app.NotificationCompat
+import androidx.core.view.GravityCompat
+import androidx.drawerlayout.widget.DrawerLayout
 import androidx.lifecycle.Observer
 import androidx.lifecycle.ViewModelProvider
 import com.sunnyweather.android.databinding.ActivityWeatherBinding
@@ -20,9 +30,18 @@ import com.sunnyweather.android.logic.model.getSky
 import com.sunnyweather.android.ui.weather.WeatherViewModel
 import java.text.SimpleDateFormat
 import java.util.Locale
+import androidx.core.content.edit
+import androidx.work.Constraints
+import androidx.work.ExistingWorkPolicy
+import androidx.work.NetworkType
+import androidx.work.OneTimeWorkRequestBuilder
+import androidx.work.WorkManager
 
 class WeatherActivity : AppCompatActivity() {
+
+
     private lateinit var binding: ActivityWeatherBinding
+    val drawerLayout get() = binding.drawerLayout
     private lateinit var bindingNow: NowBinding
     private lateinit var bindingForecast: ForecastBinding
     private lateinit var bindingLifeIndex: LifeIndexBinding
@@ -31,6 +50,8 @@ class WeatherActivity : AppCompatActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+
+//透明状态栏
         val decorView = window.decorView
         decorView.systemUiVisibility = (
                 View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN or View.SYSTEM_UI_FLAG_LAYOUT_STABLE
@@ -46,16 +67,46 @@ class WeatherActivity : AppCompatActivity() {
 
         bindingLifeIndex = binding.lifeIndexLayout
 
+        bindingNow.navBtn.setOnClickListener {
+            binding.drawerLayout.openDrawer(GravityCompat.START)
+        }
+        binding.drawerLayout.addDrawerListener(object : DrawerLayout.DrawerListener {
+            override fun onDrawerStateChanged(newState: Int) {}
+            override fun onDrawerSlide(drawerView: View, slideOffset: Float) {}
+            override fun onDrawerOpened(drawerView: View) {}
+            override fun onDrawerClosed(drawerView: View) {
+                val manager = getSystemService(Context.INPUT_METHOD_SERVICE)
+                        as InputMethodManager
+                manager.hideSoftInputFromWindow(drawerView.windowToken,
+                    InputMethodManager.HIDE_NOT_ALWAYS)
+            }
+        })
+        Log.d("intent", intent.toString())
+        Log.d("IntentCheck", "extra lng = ${intent.getStringExtra("location_lng")}")
+        Log.d("IntentCheck", "extra lat = ${intent.getStringExtra("location_lat")}")
+
+
+
         // 其他初始化和数据赋值
-        if (viewModel.locationLng.isEmpty()) {
-            viewModel.locationLng = intent.getStringExtra("location_lng") ?: ""
+        // 1. 无条件覆盖 —— 再也不怕旧值残留
+        viewModel.locationLng = intent.getStringExtra("location_lng") ?: ""
+        viewModel.locationLat = intent.getStringExtra("location_lat") ?: ""
+        viewModel.placeName   = intent.getStringExtra("place_name")  ?: ""
+
+// 2. 如果两项为空，再尝试从 SharedPreferences 兜底
+        if (viewModel.locationLng.isEmpty() || viewModel.locationLat.isEmpty()) {
+            getSharedPreferences("weather_prefs", MODE_PRIVATE).apply {
+                viewModel.locationLng = getString("lng", "") ?: ""
+                viewModel.locationLat = getString("lat", "") ?: ""
+            }
         }
-        if (viewModel.locationLat.isEmpty()) {
-            viewModel.locationLat = intent.getStringExtra("location_lat") ?: ""
+
+// 3. 把最新坐标写回 prefs（经度→lng，纬度→lat）
+        getSharedPreferences("weather_prefs", MODE_PRIVATE).edit {
+            putString("lng", viewModel.locationLng)
+            putString("lat", viewModel.locationLat)
         }
-        if (viewModel.placeName.isEmpty()) {
-            viewModel.placeName = intent.getStringExtra("place_name") ?: ""
-        }
+
 
         // 观察天气数据的变化
         viewModel.weatherLiveData.observe(this, Observer { result ->
@@ -66,9 +117,28 @@ class WeatherActivity : AppCompatActivity() {
                 Toast.makeText(this, "无法成功获取天气信息", Toast.LENGTH_SHORT).show()
                 result.exceptionOrNull()?.printStackTrace()
             }
+            binding.swipeRefresh.isRefreshing = false
         })
+        binding.swipeRefresh.setColorSchemeResources(R.color.colorPrimary)
+        refreshWeather()
+        binding.swipeRefresh.setOnRefreshListener {
+            refreshWeather()
+        }
         viewModel.refreshWeather(viewModel.locationLng, viewModel.locationLat)
+
+        val instant = OneTimeWorkRequestBuilder<WeatherCheckWorker>()
+            .setConstraints(
+                Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build()
+            )
+            .addTag("WeatherCheckNow")
+            .build()
+        WorkManager.getInstance(this)
+            .enqueueUniqueWork("WeatherCheckNow", ExistingWorkPolicy.REPLACE, instant)
+
+
+
     }
+
 
     private fun showWeatherInfo(weather: Weather) {
         // 更新天气信息
@@ -116,4 +186,25 @@ class WeatherActivity : AppCompatActivity() {
 
         binding.weatherLayout.visibility = View.VISIBLE
     }
+    fun refreshWeather() {
+        viewModel.refreshWeather(viewModel.locationLng, viewModel.locationLat)
+        binding.swipeRefresh.isRefreshing = true
+    }
+    private fun debugNotify() {
+        val channelId = "debug_channel"
+        val nm = getSystemService(NotificationManager::class.java)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            println("clicked")
+            nm.createNotificationChannel(
+                NotificationChannel(channelId, "调试通知", NotificationManager.IMPORTANCE_DEFAULT)
+            )
+        }
+        val n = NotificationCompat.Builder(this, channelId)
+            .setSmallIcon(R.drawable.ic_launcher_foreground)   // *必须*有小图标
+            .setContentTitle("调试通知")
+            .setContentText("如果你能看到这条，说明通知没问题")
+            .build()
+        nm.notify(2025, n)
+    }
+
 }

@@ -29,11 +29,6 @@ object Repository {
 
 
 fun refreshWeather(lng: String, lat: String) = fire(Dispatchers.IO) {
-    Log.d("wowowwww", lng)
-    Log.d("wwwoooooooooowowwwww", lat)
-    Log.d("wwwwwwwwwwwwwwwww", "URL: https://api.caiyunapp.com/v2.5/$TOKEN/$lng,$lat/daily.json")
-
-
 
     coroutineScope {
         val deferredRealtime = async { SunnyWeatherNetwork.getRealtimeWeather(lng, lat) }
@@ -69,6 +64,20 @@ private fun <T> fire(context: CoroutineContext, block: suspend () -> Result<T>) 
             Result.failure<T>(e)
         }
         emit(result)
+    }
+    // Repository.kt
+    suspend fun fetchWeatherNow(lng: String, lat: String): Result<Weather> = try {
+        val realtime = SunnyWeatherNetwork.getRealtimeWeather(lng, lat)
+        val daily    = SunnyWeatherNetwork.getDailyWeather(lng, lat)
+        if (realtime.status == "ok" && daily.status == "ok") {
+            Result.success(Weather(realtime.result.realtime, daily.result.daily))
+        } else {
+            Result.failure(
+                RuntimeException("realtime=${realtime.status}, daily=${daily.status}")
+            )
+        }
+    } catch (e: Exception) {
+        Result.failure(e)
     }
 
 }
